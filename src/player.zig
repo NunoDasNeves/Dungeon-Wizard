@@ -41,6 +41,12 @@ pub fn runPrototype(run: *const Run) Thing {
                 .max_threshold = 3,
             };
         },
+        .bob_basic => {
+            base.mana = .{
+                .max = 3,
+                .curr = 3,
+            };
+        },
     }
     base.player_input.?.actions.initRun(run);
 

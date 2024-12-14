@@ -39,6 +39,7 @@ pub const Mode = enum {
     frank_4_slot,
     mandy_3_mana,
     crispin_picker,
+    bob_basic,
 };
 
 pub const Reward = struct {
