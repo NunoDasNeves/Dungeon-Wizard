@@ -106,7 +106,9 @@ pub fn playerProto() Thing {
         .max_speed = 0.01875 * TileMap.tile_sz_f,
     };
     ret.vision_range = TileMap.tile_sz_f * 4;
-    ret.player_input = player.Input{};
+    ret.player_input = player.Input{
+        .actions = .{},
+    };
     ret.controller = .{ .player = .{} };
 
     return ret;

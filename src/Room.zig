@@ -437,6 +437,9 @@ pub fn update(self: *Room) Error!void {
         assert(thing.alloc_state == .allocated);
         assert(thing.spawn_state == .spawning);
         thing.spawn_state = .spawned;
+        if (thing.player_input) |*input| {
+            input.actions.initRoom(self);
+        }
     }
     self.spawn_queue.len = 0;
 

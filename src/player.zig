@@ -27,9 +27,9 @@ const Player = @This();
 
 pub const enum_name = "player";
 
-pub fn modePrototype(mode: Run.Mode) Thing {
+pub fn runPrototype(run: *const Run) Thing {
     var base = App.get().data.creature_protos.get(.player);
-    switch (mode) {
+    switch (run.mode) {
         .frank_4_slot => {},
         .mandy_3_mana => {
             base.mana = .{ .max = 3, .curr = 3 };
@@ -42,19 +42,43 @@ pub fn modePrototype(mode: Run.Mode) Thing {
             };
         },
     }
+    base.player_input.?.actions.initRun(run);
+
     return base;
 }
 
+pub const Attack = struct {
+    range: f32 = 30,
+    hitbox: Thing.HitBox = .{
+        .deactivate_on_hit = true,
+        .deactivate_on_update = true,
+        .effect = .{
+            .damage = 2,
+            .force = .{ .from_center = 1 },
+        },
+    },
+    cooldown_secs: f32 = 1,
+    targeting_data: Spell.TargetingData = .{},
+
+    pub inline fn renderTargeting(self: *const Attack, room: *const Room, caster: *const Thing, params: ?Spell.Params) Error!void {
+        return self.targeting_data.render(room, caster, params);
+    }
+};
+
 pub const Action = struct {
     pub const Kind = enum {
-        spell,
-        item,
         discard,
+        item,
+        spell,
+        //move,
+        //attack,
     };
     pub const KindData = union(Kind) {
-        spell: Spell,
-        item: Item,
         discard: struct {}, // @hasField etc doesn't work with void, so empty struct
+        item: Item,
+        spell: Spell,
+        //move: struct {},
+        //attack: Attack,
     };
     // identifies an Action (in context - e.g. a player action, a particular NPC's action, not a universal lookup (yet))
     pub const Id = struct {
@@ -63,15 +87,132 @@ pub const Action = struct {
     };
     // an Action that isn't being done yet. Just point to it, and the params used to run it
     pub const Buffered = struct {
-        action: KindData,
+        id: Action.Id,
         params: ?Spell.Params = null,
-        slot_idx: i32,
     };
+    kind: KindData,
+    // generic state for running the action
+    curr_tick: i64 = 0,
+};
+
+pub const Slotu = struct {
+    id: Action.Id,
+    cooldown_timer: ?utl.TickCounter = null,
+    // lazy mapping to input bindings, can use id to get it
+    input_idx: ?usize = null,
+    // on-screen button, if applicable
+    ui_slot_idx: ?usize = null,
+};
+
+pub const SpellSlot = struct {
+    spell: ?Spell,
+    slot: Slotu,
+};
+
+pub const ActionSlot = struct {
+    action: ?Action,
+    cooldown_timer: ?utl.TickCounter = null,
+    // identify the kind (if action is empty),
+    id: Action.Id,
+    // lazy mapping to input bindings, can use id to get it
+    input_idx: ?usize = null,
+    // on-screen button, if applicable
+    ui_slot_idx: ?usize = null,
+
+    pub fn initDiscard() ActionSlot {
+        return .{
+            .action = .{ .kind = .{ .discard = .{} } },
+            .id = .{
+                .kind = .discard,
+            },
+        };
+    }
+    pub fn initItem(maybe_item: ?Item, slot_idx: usize) ActionSlot {
+        return .{
+            .action = if (maybe_item) |item| .{ .kind = .{ .item = item } } else null,
+            .id = .{
+                .kind = .item,
+                .slot_idx = slot_idx,
+            },
+        };
+    }
+    pub fn initSpell(maybe_spell: ?Spell, slot_idx: usize) ActionSlot {
+        return .{
+            .action = if (maybe_spell) |spell| .{ .kind = .{ .spell = spell } } else null,
+            .id = .{
+                .kind = .spell,
+                .slot_idx = slot_idx,
+            },
+        };
+    }
+    pub fn update(self: *ActionSlot) ?*ActionSlot {
+        //
+        _ = self;
+        return null;
+    }
+};
+
+pub const ActionSlots = struct {
+    discard: ?ActionSlot = null,
+    items: std.BoundedArray(ActionSlot, 8) = .{},
+    spells: std.BoundedArray(ActionSlot, 6) = .{},
+    //move: ActionSlot,
+    //attack: ?ActionSlot,
+    pub fn initRun(self: *ActionSlots, run: *const Run) void {
+        if (run.mode == .mandy_3_mana) {
+            self.discard = ActionSlot.initDiscard();
+        }
+        self.items.clear();
+        self.items.appendAssumeCapacity(ActionSlot.initItem(Item.getProto(.pot_hp), 0));
+        for (1..4) |i| {
+            self.items.appendAssumeCapacity(ActionSlot.initItem(null, i));
+        }
+        self.spells.clear();
+        for (0..4) |i| {
+            self.items.appendAssumeCapacity(ActionSlot.initSpell(null, i));
+        }
+    }
+    pub fn initRoom(self: *ActionSlots, room: *Room) void {
+        for (self.spells.slice()) |*spell_slot| {
+            assert(spell_slot.id.kind == .spell);
+            if (room.drawSpell()) |spell| {
+                spell_slot.action = .{ .kind = .{ .spell = spell } };
+            }
+        }
+    }
+
+    pub fn getSlotById(self: *ActionSlots, id: Action.Id) ?*ActionSlot {
+        return switch (id.kind) {
+            .discard => if (self.discard) |*d| d else null,
+            .item => if (id.slot_idx) |idx| if (idx < self.items.len) &self.items.buffer[idx] else null else null,
+            .spell => if (id.slot_idx) |idx| if (idx < self.spells.len) &self.spells.buffer[idx] else null else null,
+        };
+    }
+    pub fn getSlotByIdConst(self: *const ActionSlots, id: Action.Id) ?*const ActionSlot {
+        return @constCast(self).getSlotById(id);
+    }
 };
 
 pub const Input = struct {
-    move_press_ui_timer: utl.TickCounter = utl.TickCounter.initStopped(60),
-    move_release_ui_timer: utl.TickCounter = utl.TickCounter.initStopped(60),
+    rmb_press_ui_timer: utl.TickCounter = utl.TickCounter.initStopped(60),
+    // TODO use for cursor (or use targeting data later? idk)
+    //rmb_press_ui_kind: enum {
+    //    move,
+    //    attack,
+    //} = .move,
+    // TODOish
+    // used to draw the ui buttons with the right state
+    // also look up the input binding and select/buffer the action
+    actions: ActionSlots = .{},
+
+    // TODO keep track of selected/buffered here
+    //selected_action: ?struct {
+    //    id: Action.Id,
+    //} = null,
+    //queued_action: ?struct {
+    //    id: Action.Id,
+    //    params: ?Spell.Params = null,
+    //} = null,
 
     pub fn update(self: *Thing, room: *Room) Error!void {
         assert(self.spawn_state == .spawned);
@@ -80,6 +221,37 @@ pub const Input = struct {
         const controller = &self.controller.player;
         const ui_slots = &room.ui_slots;
         const mouse_pos = plat.getMousePosWorld(room.camera);
+
+        var selected_slot: ?*const ActionSlot = null;
+        if (input.actions.discard) |*discard| {
+            if (discard.update()) |s| {
+                selected_slot = s;
+            }
+        }
+        for (input.actions.items.slice()) |*item_slot| {
+            if (item_slot.update()) |s| {
+                selected_slot = s;
+            }
+        }
+        for (input.actions.spells.slice()) |*spell_slot| {
+            if (spell_slot.update()) |s| {
+                selected_slot = s;
+            }
+        }
+        if (false) {
+            if (input.actions.move.update()) |s| {
+                selected_slot = s;
+            }
+            if (input.actions.attack) |*atk| {
+                if (atk.update()) |s| {
+                    selected_slot = s;
+                }
+            }
+        }
+        if (selected_slot) |action_slot| {
+            _ = action_slot;
+            // TODO
+        }
 
         try ui_slots.update(room, self);
         if (!room.paused) {
@@ -95,10 +267,11 @@ pub const Input = struct {
             }
         }
 
+        _ = input.rmb_press_ui_timer.tick(true);
         // clicking rmb cancels buffered action
         // !room.ui_clicked and
         if (plat.input_buffer.mouseBtnIsJustPressed(.right)) {
-            input.move_press_ui_timer.restart();
+            input.rmb_press_ui_timer.restart();
             ui_slots.unselectSlot();
             controller.action_buffered = null;
         }
@@ -107,11 +280,7 @@ pub const Input = struct {
         // !room.ui_hovered and
         if (controller.action_buffered == null and plat.input_buffer.mouseBtnIsDown(.right)) {
             try self.findPath(room, mouse_pos);
-            _ = input.move_press_ui_timer.tick(true);
-            input.move_release_ui_timer.restart();
-        } else {
-            _ = input.move_press_ui_timer.tick(true);
-            _ = input.move_release_ui_timer.tick(false);
+            input.rmb_press_ui_timer.restart();
         }
 
         if (ui_slots.getSelectedActionSlot()) |slot| {
@@ -134,9 +303,11 @@ pub const Input = struct {
                 if (_params) |params| {
                     self.path.len = 0; // cancel the current path on cast, but you can buffer a new one
                     controller.action_buffered = Action.Buffered{
-                        .action = action,
+                        .id = .{
+                            .kind = std.meta.activeTag(action),
+                            .slot_idx = slot.idx,
+                        },
                         .params = params,
-                        .slot_idx = utl.as(i32, slot.idx),
                     };
                     switch (action) {
                         .spell => |s| if (self.mana) |*mana| {
@@ -149,8 +320,10 @@ pub const Input = struct {
                     ui_slots.changeSelectedSlotToBuffered();
                 } else if (action == .discard) {
                     controller.action_buffered = Action.Buffered{
-                        .action = .{ .discard = .{} },
-                        .slot_idx = 0,
+                        .id = .{
+                            .kind = .discard,
+                            .slot_idx = null,
+                        },
                     };
                     ui_slots.changeSelectedSlotToBuffered();
                 } else if (cast_method == .quick_press or cast_method == .quick_release) {
@@ -182,15 +355,23 @@ pub const Input = struct {
                 }
             }
             if (controller.action_buffered) |b| {
-                if (actionHasTargeting(b.action)) {
-                    params = b.params;
-                    break :blk b.action;
+                if (input.actions.getSlotByIdConst(b.id)) |slot| {
+                    if (slot.action) |action| {
+                        if (actionHasTargeting(action.kind)) {
+                            params = b.params;
+                            break :blk action.kind;
+                        }
+                    }
                 }
             }
             if (controller.action_casting) |b| {
-                if (actionHasTargeting(b.action)) {
-                    params = b.params;
-                    break :blk b.action;
+                if (input.actions.getSlotByIdConst(b.id)) |slot| {
+                    if (slot.action) |action| {
+                        if (actionHasTargeting(action.kind)) {
+                            params = b.params;
+                            break :blk action.kind;
+                        }
+                    }
                 }
             }
             break :blk null;
@@ -205,10 +386,10 @@ pub const Input = struct {
             }
         }
 
-        if (self.path.len > 0) { // and input.move_release_ui_timer.running
+        if (self.path.len > 0) {
             const move_pos = self.path.get(self.path.len - 1);
-            const release_f = 0; //input.move_release_ui_timer.remapTo0_1();
-            const bounce_f = input.move_press_ui_timer.remapTo0_1();
+            const release_f = 0;
+            const bounce_f = input.rmb_press_ui_timer.remapTo0_1();
             const bounce_t = @sin(bounce_f * 3);
             const bounce_range = 5;
             const y_off = -bounce_range * bounce_t;
@@ -255,6 +436,7 @@ pub const Controller = struct {
     pub fn update(self: *Thing, room: *Room) Error!void {
         assert(self.spawn_state == .spawned);
         const controller = &self.controller.player;
+        const input = &self.player_input.?;
 
         if (controller.mana_regen) |*mrgn| {
             if (self.mana) |*mana| {
@@ -268,45 +450,50 @@ pub const Controller = struct {
 
         if (controller.action_buffered) |buffered| {
             if (controller.action_casting == null) {
-                const slot_idx = utl.as(usize, buffered.slot_idx);
+                if (input.actions.getSlotById(buffered.id)) |slot| {
+                    if (slot.action) |action| {
+                        switch (action.kind) {
+                            .spell => |spell| {
+                                const slot_idx = buffered.id.slot_idx.?;
+                                room.ui_slots.clearSlotByActionKind(slot_idx, .spell);
+                                if (spell.mislay) {
+                                    room.mislaySpell(spell);
+                                } else {
+                                    room.discardSpell(spell);
+                                }
+                                if (self.mana) |*mana| {
+                                    if (spell.mana_cost.getActualCost(self)) |cost| {
+                                        assert(mana.curr >= cost);
+                                        mana.curr -= cost;
+                                    }
+                                }
+                                if (self.statuses.get(.quickdraw).stacks > 0) {
+                                    room.ui_slots.setActionSlotCooldown(slot_idx, .spell, 0);
+                                    self.statuses.getPtr(.quickdraw).addStacks(self, -1);
+                                } else if (spell.draw_immediate) {
+                                    room.ui_slots.setActionSlotCooldown(slot_idx, .spell, 0);
+                                } else if (room.init_params.mode == .mandy_3_mana) {
+                                    // mandy doesn't set cooldowns on the slots until full discard
+                                    room.ui_slots.setActionSlotCooldown(slot_idx, .spell, null);
+                                } else {
+                                    // otherwise normal cooldown
+                                    room.ui_slots.setActionSlotCooldown(slot_idx, .spell, spell.getSlotCooldownTicks());
+                                }
+                                controller.cast_counter = utl.TickCounter.init(spell.cast_ticks);
+                            },
+                            .item => {
+                                const slot_idx = buffered.id.slot_idx.?;
+                                room.ui_slots.clearSlotByActionKind(slot_idx, .item);
+                            },
+                            else => {},
+                        }
 
-                switch (buffered.action) {
-                    .spell => |spell| {
-                        room.ui_slots.clearSlotByActionKind(slot_idx, .spell);
-                        if (spell.mislay) {
-                            room.mislaySpell(spell);
-                        } else {
-                            room.discardSpell(spell);
-                        }
-                        if (self.mana) |*mana| {
-                            if (spell.mana_cost.getActualCost(self)) |cost| {
-                                assert(mana.curr >= cost);
-                                mana.curr -= cost;
-                            }
-                        }
-                        if (self.statuses.get(.quickdraw).stacks > 0) {
-                            room.ui_slots.setActionSlotCooldown(slot_idx, .spell, 0);
-                            self.statuses.getPtr(.quickdraw).addStacks(self, -1);
-                        } else if (spell.draw_immediate) {
-                            room.ui_slots.setActionSlotCooldown(slot_idx, .spell, 0);
-                        } else if (room.init_params.mode == .mandy_3_mana) {
-                            // mandy doesn't set cooldowns on the slots until full discard
-                            room.ui_slots.setActionSlotCooldown(slot_idx, .spell, null);
-                        } else {
-                            // otherwise normal cooldown
-                            room.ui_slots.setActionSlotCooldown(slot_idx, .spell, spell.getSlotCooldownTicks());
-                        }
-                        controller.cast_counter = utl.TickCounter.init(spell.cast_ticks);
-                    },
-                    .item => {
-                        room.ui_slots.clearSlotByActionKind(slot_idx, .item);
-                    },
-                    else => {},
+                        controller.action_casting = buffered;
+                        controller.action_buffered = null;
+                        // make sure selected action is still valid! It may be selected but not buffered, bypassing the canUse check in gameUI.Slots
+                        room.ui_slots.cancelSelectedActionSlotIfInvalid(room, self);
+                    }
                 }
-                controller.action_casting = buffered;
-                controller.action_buffered = null;
-                // make sure selected action is still valid! It may be selected but not buffered, bypassing the canUse check in gameUI.Slots
-                room.ui_slots.cancelSelectedActionSlotIfInvalid(room, self);
             }
         }
 
@@ -354,13 +541,14 @@ pub const Controller = struct {
                     const cast_loop_volume = 0.2;
                     const cast_end_volume = 0.4;
                     const s = controller.action_casting.?;
+                    const action = &input.actions.getSlotById(controller.action_casting.?.id).?.action.?;
                     if (controller.ticks_in_state == 0) {
                         if (s.params) |params| {
                             if (params.face_dir) |dir| {
                                 self.dir = dir;
                             }
                         }
-                        switch (controller.action_casting.?.action) {
+                        switch (action.kind) {
                             .spell => {
                                 const cast_proto = Thing.CastVFXController.castingProto(self);
                                 if (try room.queueSpawnThing(&cast_proto, cast_proto.pos)) |id| {
@@ -371,7 +559,7 @@ pub const Controller = struct {
                         }
                     }
                     if (controller.cast_counter.tick(false)) {
-                        switch (controller.action_casting.?.action) {
+                        switch (action.kind) {
                             .item => |item| try item.use(self, room, s.params.?),
                             .spell => |spell| {
                                 try spell.cast(self, room, s.params.?);

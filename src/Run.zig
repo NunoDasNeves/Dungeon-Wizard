@@ -184,13 +184,13 @@ pub fn initSeeded(run: *Run, mode: Mode, seed: u64) Error!*Run {
         .seed = seed,
         .deck = makeStarterDeck(false),
         .dead_menu = makeDeadMenu(),
-        .player_thing = player.modePrototype(mode),
         .mode = mode,
     };
     run.room_buf_size = 0;
     run.room_buf_head = 0;
     run.room_buf_tail = 0;
 
+    run.player_thing = player.runPrototype(run);
     // TODO elsewhererre?
     run.slots.discard_button = mode == .mandy_3_mana;
     run.slots.items.clear();
