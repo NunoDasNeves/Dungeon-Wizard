@@ -481,6 +481,7 @@ pub const MiscIcon = enum {
     deck,
     gearwheel,
     help,
+    card_remove,
 };
 
 pub const TileMapIdxBuf = std.BoundedArray(usize, 16);
