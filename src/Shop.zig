@@ -27,6 +27,8 @@ const gameUI = @import("gameUI.zig");
 const Item = @import("Item.zig");
 const ImmUI = @import("ImmUI.zig");
 const icon_text = @import("icon_text.zig");
+const sprites = @import("sprites.zig");
+const Tooltip = @import("Tooltip.zig");
 const Shop = @This();
 
 const max_num_spells = 5;
@@ -41,13 +43,13 @@ const items_spacing: f32 = 10;
 
 const slot_margin: f32 = 5;
 
-pub const SpellOrItem = union(enum) {
-    spell: Spell,
-    item: Item,
-};
-
 pub const Product = struct {
-    kind: SpellOrItem,
+    pub const Kind = union(enum) {
+        spell: Spell,
+        item: Item,
+        card_remove: usize, // idx
+    };
+    kind: Kind,
     price: union(enum) {
         gold: i32,
     } = .{ .gold = 10 },
@@ -61,10 +63,17 @@ const ProductSlot = struct {
 
 spells: std.BoundedArray(ProductSlot, max_num_spells) = .{},
 items: std.BoundedArray(ProductSlot, max_num_items) = .{},
+card_remove_slot: ProductSlot = .{
+    .product = .{
+        .kind = .{ .card_remove = 0 },
+        .price = .{ .gold = 5 },
+    },
+},
 rng: std.Random.DefaultPrng,
 state: enum {
     shopping,
     done,
+    card_removal,
 } = .shopping,
 
 pub fn init(seed: u64, run: *Run) Error!Shop {
@@ -143,14 +152,14 @@ pub fn canBuy(run: *Run, product: *const Product) bool {
     return run.gold >= price and run.canPickupProduct(product);
 }
 
-fn unqProductSlot(cmd_buf: *ImmUI.CmdBuf, tooltip_buf: *ImmUI.CmdBuf, slot: *ProductSlot, run: *Run) Error!bool {
+fn unqProductSlot(cmd_buf: *ImmUI.CmdBuf, tooltip_buf: *ImmUI.CmdBuf, slot: *ProductSlot, run: *Run, enabled: bool) Error!bool {
     const plat = getPlat();
     const ui_scaling: f32 = plat.ui_scaling;
     var ret: bool = false;
 
     const mouse_pos = plat.getMousePosScreen();
-    const hovered = geom.pointIsInRectf(mouse_pos, slot.rect);
-    const clicked = hovered and plat.input_buffer.mouseBtnIsJustPressed(.left);
+    const hovered = enabled and geom.pointIsInRectf(mouse_pos, slot.rect);
+    const clicked = enabled and hovered and plat.input_buffer.mouseBtnIsJustPressed(.left);
     // TODO anything else here?
     const slot_enabled = slot.product != null;
     const can_buy = slot_enabled and canBuy(run, &slot.product.?);
@@ -189,6 +198,19 @@ fn unqProductSlot(cmd_buf: *ImmUI.CmdBuf, tooltip_buf: *ImmUI.CmdBuf, slot: *Pro
                     try item.unqRenderTooltip(tooltip_buf, slot_contents_pos.add(v2f(slot.rect.dims.x, 0)), ui_scaling);
                 }
             },
+            .card_remove => {
+                const data = App.getData();
+                const sprite_name = Data.MiscIcon.card_remove;
+                const info = sprites.RenderIconInfo{ .frame = data.misc_icons.getRenderFrame(sprite_name).? };
+                try info.unqRender(cmd_buf, slot_contents_pos, ui_scaling);
+                if (slot.long_hover.update(hovered)) {
+                    const tt = Tooltip{
+                        .title = Tooltip.Title.fromSlice("Remove a card") catch unreachable,
+                    };
+                    const tooltip_pos = slot.rect.pos.add(v2f(slot.rect.dims.x, 0));
+                    try tt.unqRender(tooltip_buf, tooltip_pos, ui_scaling);
+                }
+            },
         }
         const price_str = try utl.bufPrintLocal(
             "{any}{any}{}",
@@ -207,11 +229,41 @@ fn unqProductSlot(cmd_buf: *ImmUI.CmdBuf, tooltip_buf: *ImmUI.CmdBuf, slot: *Pro
 }
 
 pub fn update(self: *Shop, run: *Run) Error!?Product {
+    return switch (self.state) {
+        .done => null,
+        .shopping => try shoppingUI(self, run, true),
+        .card_removal => blk: {
+            run.deck_ui.show = true;
+            run.deck_ui.close_btn_text = "Cancel";
+            run.deck_ui.title_text = "Remove a Spell";
+            _ = try shoppingUI(self, run, false);
+            if (try run.deckUI(run.deck.constSlice(), &run.deck_ui.hover, &run.deck_ui.scroll)) |interaction| {
+                switch (interaction.state) {
+                    .hovered => {},
+                    .clicked => {
+                        self.state = .shopping;
+                        const ret = Product{
+                            .kind = .{ .card_remove = interaction.idx },
+                            .price = self.card_remove_slot.product.?.price,
+                        };
+                        self.card_remove_slot.product.?.price.gold += 2;
+                        break :blk ret;
+                    },
+                    .closed => {
+                        self.state = .shopping;
+                    },
+                }
+            }
+            break :blk null;
+        },
+    };
+}
+
+fn shoppingUI(self: *Shop, run: *Run, enabled: bool) Error!?Product {
     const plat = getPlat();
     const data = App.get().data;
     const ui_scaling: f32 = plat.ui_scaling;
     var ret: ?Product = null;
-
     try run.imm_ui.commands.append(.{ .rect = .{
         .pos = v2f(0, 0),
         .z = -1,
@@ -291,7 +343,7 @@ pub fn update(self: *Shop, run: *Run) Error!?Product {
     var emptied_slot = false;
 
     for (self.spells.slice()) |*slot| {
-        if (try unqProductSlot(&run.imm_ui.commands, &run.tooltip_ui.commands, slot, run)) {
+        if (try unqProductSlot(&run.imm_ui.commands, &run.tooltip_ui.commands, slot, run, enabled)) {
             assert(canBuy(run, &slot.product.?));
             ret = slot.product.?;
             slot.product = null;
@@ -300,7 +352,7 @@ pub fn update(self: *Shop, run: *Run) Error!?Product {
     }
 
     for (self.items.slice()) |*slot| {
-        if (try unqProductSlot(&run.imm_ui.commands, &run.tooltip_ui.commands, slot, run)) {
+        if (try unqProductSlot(&run.imm_ui.commands, &run.tooltip_ui.commands, slot, run, enabled)) {
             assert(canBuy(run, &slot.product.?));
             ret = slot.product.?;
             slot.product = null;
@@ -308,15 +360,26 @@ pub fn update(self: *Shop, run: *Run) Error!?Product {
         }
     }
 
+    // remove card slot
+    const remove_slot = &self.card_remove_slot;
+    const remove_slot_dims = Item.icon_dims.add(V2f.splat(slot_margin).scale(2)).add(v2f(0, price_font_base_sz_f + slot_margin)).scale(ui_scaling);
+    const remove_slot_topleft = items_topleft.add(v2f(0, item_slot_dims.y + 20 * ui_scaling));
+    remove_slot.rect.pos = remove_slot_topleft;
+    remove_slot.rect.dims = remove_slot_dims;
+
+    if (try unqProductSlot(&run.imm_ui.commands, &run.tooltip_ui.commands, remove_slot, run, enabled)) {
+        assert(canBuy(run, &remove_slot.product.?));
+        self.state = .card_removal;
+    }
+
     if (emptied_slot) {
         self.fillEmptySlots(run);
     }
 
-    // proceed btn
-    {
+    // leave btn
+    if (enabled) {
         const proceed_btn_dims = v2f(60, 40).scale(ui_scaling);
-        const btn_center = items_topleft.add(v2f(proceed_btn_dims.x * 0.5, item_slot_dims.y + 20 * ui_scaling + proceed_btn_dims.y * 0.5));
-        const proceed_btn_pos = btn_center.sub(proceed_btn_dims.scale(0.5));
+        const proceed_btn_pos = remove_slot_topleft.add(v2f(remove_slot_dims.x + 20 * ui_scaling, 0));
 
         if (menuUI.textButton(&run.imm_ui.commands, proceed_btn_pos, "Leave", proceed_btn_dims, ui_scaling)) {
             self.state = .done;

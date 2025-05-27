@@ -1,7 +1,9 @@
 # Changelog
 
-## v0.12.4 (2025-03-30)
+## v0.13.0 (2025-05-??)
+- Add a button at the Shop to remove a card from your deck, costing 5 gold
 
+## v0.12.4 (2025-03-30)
 - Fix crash caused by manually resizing window in certain cases (Thanks to https://github.com/JustinBraben)
 
 ## v0.12.3 (2025-03-21)

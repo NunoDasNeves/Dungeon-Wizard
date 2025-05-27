@@ -158,13 +158,13 @@ ui_clicked: bool = false,
 ui_hovered: bool = false,
 exit_to_menu: bool = false,
 deck_ui: struct {
+    show: bool = false,
     debug_select: bool = false,
     hover: DeckHover = .{},
     rect: geom.Rectf = .{},
-    scroll_y: f32 = 0,
-    scroll_vel: f32 = 0,
-    texture: Platform.RenderTexture2D = undefined,
-    commands: ImmUI.CmdBuf = .{},
+    scroll: ScrollUI = .{},
+    title_text: []const u8 = "Spells",
+    close_btn_text: []const u8 = "Close",
 } = .{},
 how_to_play_ui: struct {
     screen: usize = 0,
@@ -182,7 +182,7 @@ pub fn initSeeded(run: *Run, mode: Mode, seed: u64) Error!*Run {
     };
     const deck_dims = getDeckTextureDims();
     run.deck_ui.rect.dims = deck_dims;
-    run.deck_ui.texture = plat.createRenderTexture("deck", deck_dims.toV2i());
+    run.deck_ui.scroll.texture = plat.createRenderTexture("deck", deck_dims.toV2i());
 
     if (!config.is_release) {
         Log.info("Allocating debug room buf: {}KiB\n", .{(@sizeOf(Room) * 60) / 1024});
@@ -316,7 +316,7 @@ pub fn deinit(self: *Run) void {
     if (!config.is_release) {
         plat.heap.free(self.room_buf);
     }
-    plat.destroyRenderTexture(self.deck_ui.texture);
+    plat.destroyRenderTexture(self.deck_ui.scroll.texture);
 }
 
 pub fn reset(self: *Run) Error!void {
@@ -424,6 +424,9 @@ pub fn canPickupProduct(self: *Run, product: *const Shop.Product) bool {
         .item => |_| {
             if (self.ui_slots.getNextEmptyItemSlot() == null) return false;
         },
+        .card_remove => |idx| {
+            if (idx >= self.deck.len or self.deck.len <= 1) return false;
+        },
     }
     return true;
 }
@@ -442,6 +445,9 @@ pub fn pickupProduct(self: *Run, product: *const Shop.Product) void {
             const slot = self.ui_slots.getNextEmptyItemSlot().?;
             slot.item = item;
         },
+        .card_remove => |idx| {
+            _ = self.deck.orderedRemove(idx);
+        },
     }
 }
 
@@ -453,10 +459,10 @@ pub fn resolutionChanged(self: *Run) void {
     const plat = getPlat();
     self.room.resolutionChanged();
     self.ui_slots.reflowRects();
-    plat.destroyRenderTexture(self.deck_ui.texture);
+    plat.destroyRenderTexture(self.deck_ui.scroll.texture);
     const deck_dims = getDeckTextureDims();
     self.deck_ui.rect.dims = deck_dims;
-    self.deck_ui.texture = plat.createRenderTexture("deck", deck_dims.toV2i());
+    self.deck_ui.scroll.texture = plat.createRenderTexture("deck", deck_dims.toV2i());
 }
 
 pub fn roomUpdate(self: *Run) Error!void {
@@ -545,12 +551,19 @@ pub fn roomUpdate(self: *Run) Error!void {
     }
 }
 
-const DeckHover = struct {
+pub const ScrollUI = struct {
+    scroll_y: f32 = 0,
+    scroll_vel: f32 = 0,
+    texture: Platform.RenderTexture2D = undefined,
+    commands: ImmUI.CmdBuf = .{},
+};
+
+pub const DeckHover = struct {
     idx: ?usize = null,
     long_hover: menuUI.LongHover = .{},
 };
-const DeckInteraction = struct {
-    state: enum { hovered, clicked },
+pub const DeckInteraction = struct {
+    state: enum { hovered, clicked, closed },
     idx: usize,
 };
 
@@ -565,7 +578,7 @@ pub fn getDeckTextureDims() V2f {
     return dims;
 }
 
-pub fn deckUI(self: *Run, deck: []const Spell, hover: *DeckHover, scroll_y: *f32, scroll_vel: *f32) Error!?DeckInteraction {
+pub fn deckUI(self: *Run, deck: []const Spell, hover: *DeckHover, scroll_ui: *ScrollUI) Error!?DeckInteraction {
     const plat = getPlat();
     const data = App.getData();
     const ui_scaling: f32 = plat.ui_scaling;
@@ -591,7 +604,7 @@ pub fn deckUI(self: *Run, deck: []const Spell, hover: *DeckHover, scroll_y: *f32
     const title_center = v2f(modal_center_x, modal_topleft.y + 20 * ui_scaling);
     self.imm_ui.commands.appendAssumeCapacity(.{ .label = .{
         .pos = title_center,
-        .text = ImmUI.initLabel("Spells"),
+        .text = ImmUI.initLabel(self.deck_ui.title_text),
         .opt = .{
             .size = title_font.base_size * u.as(u32, ui_scaling + 1),
             .font = title_font,
@@ -614,7 +627,7 @@ pub fn deckUI(self: *Run, deck: []const Spell, hover: *DeckHover, scroll_y: *f32
     const spells_spacing_y_unscaled = 10;
     const spells_top_y_padding_unscaled = 5;
     const spell_spacing = v2f(10, spells_spacing_y_unscaled).scale(ui_scaling);
-    const spells_topleft_pos: V2f = v2f(0, spells_top_y_padding_unscaled * ui_scaling - scroll_y.* * ui_scaling);
+    const spells_topleft_pos: V2f = v2f(0, spells_top_y_padding_unscaled * ui_scaling - scroll_ui.scroll_y * ui_scaling);
     const mouse_in_deck_rect = geom.pointIsInRectf(mouse_pos, self.deck_ui.rect);
     var curr_pos: V2f = spells_topleft_pos;
     var col: usize = 0;
@@ -643,7 +656,7 @@ pub fn deckUI(self: *Run, deck: []const Spell, hover: *DeckHover, scroll_y: *f32
                 .idx = idx,
             };
         }
-        _ = spell.unqRenderCard(&self.deck_ui.commands, rect.pos, null, ui_scaling);
+        _ = spell.unqRenderCard(&self.deck_ui.scroll.commands, rect.pos, null, ui_scaling);
 
         col += 1;
         if (col == spells_per_row) {
@@ -670,12 +683,12 @@ pub fn deckUI(self: *Run, deck: []const Spell, hover: *DeckHover, scroll_y: *f32
     const max_scroll_y = @max(total_height - self.deck_ui.rect.dims.y / ui_scaling, 0);
     const wheel_y = plat.mouseWheelY();
     if (wheel_y != 0) {
-        scroll_vel.* -= wheel_y;
-        scroll_vel.* = std.math.sign(scroll_vel.*) * @min(@abs(scroll_vel.*), 20);
+        scroll_ui.scroll_vel -= wheel_y;
+        scroll_ui.scroll_vel = std.math.sign(scroll_ui.scroll_vel) * @min(@abs(scroll_ui.scroll_vel), 20);
         //const abs = @max(@abs(wheel_y) * 1.2, 6);
-        scroll_y.* += scroll_vel.*; //scroll_y.* - abs * std.math.sign(wheel_y);
+        scroll_ui.scroll_y += scroll_ui.scroll_vel; //scroll_y.* - abs * std.math.sign(wheel_y);
     } else {
-        scroll_vel.* *= 0.9;
+        scroll_ui.scroll_vel *= 0.9;
     }
     // draw scroll bar/arrows
     if (max_scroll_y > 0) {
@@ -693,13 +706,13 @@ pub fn deckUI(self: *Run, deck: []const Spell, hover: *DeckHover, scroll_y: *f32
             .opt = .{ .fill_color = .gray },
         } });
         if (menuUI.scrollButton(&self.imm_ui.commands, scrollbar_up_btn_pos, scrollbar_btn_dims, .up, ui_scaling)) {
-            scroll_y.* = scroll_y.* - 5;
+            scroll_ui.scroll_y = scroll_ui.scroll_y - 5;
         }
         if (menuUI.scrollButton(&self.imm_ui.commands, scrollbar_down_btn_pos, scrollbar_btn_dims, .down, ui_scaling)) {
-            scroll_y.* = scroll_y.* + 5;
+            scroll_ui.scroll_y = scroll_ui.scroll_y + 5;
         }
     }
-    scroll_y.* = u.clampf(scroll_y.*, 0, max_scroll_y);
+    scroll_ui.scroll_y = u.clampf(scroll_ui.scroll_y, 0, max_scroll_y);
 
     // anchor button to bottom left of modal
     const btn_dims = v2f(60, 25).scale(ui_scaling);
@@ -707,8 +720,8 @@ pub fn deckUI(self: *Run, deck: []const Spell, hover: *DeckHover, scroll_y: *f32
         modal_topleft.x + modal_dims.x + 10 * ui_scaling,
         modal_topleft.y + modal_dims.y - 7 * ui_scaling - btn_dims.y,
     );
-    if (menuUI.textButton(&self.imm_ui.commands, btn_topleft, "Close", btn_dims, ui_scaling)) {
-        self.toggleShowDeck();
+    if (menuUI.textButton(&self.imm_ui.commands, btn_topleft, self.deck_ui.close_btn_text, btn_dims, ui_scaling)) {
+        interaction = .{ .state = .closed, .idx = 0 };
     }
 
     return interaction;
@@ -1382,8 +1395,8 @@ pub fn toggleShowDeck(self: *Run) void {
     } else {
         self.prev_screen = self.screen;
         self.deck_ui.hover = .{};
-        self.deck_ui.scroll_y = 0;
-        self.deck_ui.scroll_vel = 0;
+        self.deck_ui.scroll.scroll_y = 0;
+        self.deck_ui.scroll.scroll_vel = 0;
         self.screen = .deck;
         self.deck_ui.debug_select = false;
     }
@@ -1405,7 +1418,7 @@ pub fn update(self: *Run) Error!void {
 
     self.imm_ui.commands.clear();
     self.tooltip_ui.commands.clear();
-    self.deck_ui.commands.clear();
+    self.deck_ui.scroll.commands.clear();
 
     if (debug.enable_debug_controls) {
         if (plat.input_buffer.keyIsJustPressed(.f3)) {
@@ -1461,6 +1474,8 @@ pub fn update(self: *Run) Error!void {
         try self.ui_slots.roomUpdate(&self.imm_ui.commands, &self.tooltip_ui.commands, self, thing);
     }
 
+    self.deck_ui.show = false;
+
     switch (self.load_state) {
         .none => {
             switch (self.screen) {
@@ -1470,20 +1485,29 @@ pub fn update(self: *Run) Error!void {
                 .dead => try self.deadUpdate(),
                 .win => try self.winUpdate(),
                 .deck => {
+                    self.deck_ui.show = true;
+                    self.deck_ui.close_btn_text = "Close";
+                    self.deck_ui.title_text = "Spells";
                     if (debug.enable_debug_controls and plat.input_buffer.keyIsJustPressed(.m)) {
                         self.deck_ui.debug_select = !self.deck_ui.debug_select;
                     }
                     if (self.deck_ui.debug_select) {
-                        if (try self.deckUI(&Spell.all_spells, &self.deck_ui.hover, &self.deck_ui.scroll_y, &self.deck_ui.scroll_vel)) |interaction| {
+                        if (try self.deckUI(&Spell.all_spells, &self.deck_ui.hover, &self.deck_ui.scroll)) |interaction| {
                             if (interaction.state == .clicked) {
                                 self.ui_slots.debug_spell.spell = Spell.all_spells[interaction.idx];
                                 self.ui_slots.debug_spell.spell.?.mana_cost = Spell.ManaCost.num(0);
                                 self.ui_slots.selectAction(.{ .action = .{ .kind = .spell } }, .left_click);
                                 self.screen = .room;
+                            } else if (interaction.state == .closed) {
+                                self.toggleShowDeck();
                             }
                         }
                     } else {
-                        _ = try self.deckUI(self.deck.constSlice(), &self.deck_ui.hover, &self.deck_ui.scroll_y, &self.deck_ui.scroll_vel);
+                        if (try self.deckUI(self.deck.constSlice(), &self.deck_ui.hover, &self.deck_ui.scroll)) |interaction| {
+                            if (interaction.state == .closed) {
+                                self.toggleShowDeck();
+                            }
+                        }
                     }
                 },
                 .how_to_play => try self.howToPlayUpdate(),
@@ -1521,11 +1545,11 @@ pub fn render(self: *Run, ui_render_texture: Platform.RenderTexture2D, game_rend
     }
 
     // deck
-    if (self.screen == .deck) {
-        plat.startRenderToTexture(self.deck_ui.texture);
+    if (self.deck_ui.show) {
+        plat.startRenderToTexture(self.deck_ui.scroll.texture);
         plat.setBlend(.render_tex_alpha);
         plat.clear(.blank);
-        try ImmUI.render(&self.deck_ui.commands);
+        try ImmUI.render(&self.deck_ui.scroll.commands);
         plat.endRenderToTexture();
     }
 
@@ -1534,9 +1558,9 @@ pub fn render(self: *Run, ui_render_texture: Platform.RenderTexture2D, game_rend
     plat.setBlend(.render_tex_alpha);
 
     try ImmUI.render(&self.imm_ui.commands);
-    if (self.screen == .deck) {
+    if (self.deck_ui.show) {
         // render deck texture in the right position
-        plat.texturef(self.deck_ui.rect.pos, self.deck_ui.texture.texture, .{
+        plat.texturef(self.deck_ui.rect.pos, self.deck_ui.scroll.texture.texture, .{
             .round_to_pixel = true,
             .flip_y = true,
         });
