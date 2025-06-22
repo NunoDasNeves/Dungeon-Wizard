@@ -79,12 +79,12 @@ pub const DeadMenu = struct {
 pub fn makeStarterDeck() Spell.SpellArray {
     var ret = Spell.SpellArray{};
     // TODO placeholder
-    const unherring = Spell.getProto(.unherring);
+    const missilette = Spell.getProto(.missilette);
     const expose = Spell.getProto(.expose);
     const shield_fu = Spell.getProto(.shield_fu);
 
     const deck_cards = &[_]struct { Spell, usize }{
-        .{ unherring, 4 },
+        .{ missilette, 4 },
         .{ shield_fu, 2 },
         .{ expose, 1 },
     };

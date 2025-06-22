@@ -88,6 +88,7 @@ pub const SpellTypes = blk: {
         @import("spells/MassIgnite.zig"),
         @import("spells/Hmmm.zig"),
         @import("spells/Switcharoo.zig"),
+        @import("spells/Missilette.zig"),
     };
     const nonplayer_spells = @import("spells/nonplayer.zig").spells;
     break :blk player_spells ++ nonplayer_spells;
