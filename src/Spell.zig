@@ -82,11 +82,11 @@ pub const SpellTypes = blk: {
         @import("spells/FlareDart.zig"),
         @import("spells/Trailblaze.zig"),
         @import("spells/FlamePurge.zig"),
-        @import("spells/BlankMind.zig"),
+        //@import("spells/BlankMind.zig"),
         @import("spells/ShieldFu.zig"),
         @import("spells/Ignite.zig"),
         @import("spells/MassIgnite.zig"),
-        @import("spells/Hmmm.zig"),
+        //@import("spells/Hmmm.zig"),
         @import("spells/Switcharoo.zig"),
         @import("spells/Missilette.zig"),
     };
