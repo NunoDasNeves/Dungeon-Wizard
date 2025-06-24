@@ -84,7 +84,7 @@ pub fn makeStarterDeck() Spell.SpellArray {
     const shield_fu = Spell.getProto(.shield_fu);
 
     const deck_cards = &[_]struct { Spell, usize }{
-        .{ missilette, 4 },
+        .{ missilette, 3 },
         .{ shield_fu, 2 },
         .{ expose, 1 },
     };
