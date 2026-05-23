@@ -1,7 +1,10 @@
 # Changelog
 
-## v0.13.0 (2025-05-??)
+## v0.13.0 (2026-05-23)
 - Add a button at the Shop to remove a card from your deck, costing 5 gold
+- Replace Unherring with Missilette (fish will return in future), reduce starting missilettes in deck to 3
+- Rework Ignite and Mass Ignite
+- Remove Hmm and Blank Mind from the cardpool
 
 ## v0.12.4 (2025-03-30)
 - Fix crash caused by manually resizing window in certain cases (Thanks to https://github.com/JustinBraben)

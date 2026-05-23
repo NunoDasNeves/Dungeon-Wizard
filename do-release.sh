@@ -3,7 +3,7 @@
 set -xe
 
 ASSETS="$(pwd)/assets"
-VERSION="v0.12.4"
+VERSION="v0.13.0"
 REPO_DIR=$(realpath)
 RELEASE_REL_DIR="zig-out/release"
 APP_DIR="Dungeon Wizard.app"

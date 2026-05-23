@@ -2,7 +2,7 @@ const std = @import("std");
 const raylib_build = @import("raylib");
 
 const title = "Dungeon Wizard";
-const version = "v0.12.4";
+const version = "v0.13.0";
 
 const raylib_config: []const u8 = "-DSUPPORT_CUSTOM_FRAME_CONTROL=1";
 
